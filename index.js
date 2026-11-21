@@ -11,6 +11,7 @@ app.get("/", (req, res) => {
 
 app.get("/v/:slug", async (req, res) => {
   try {
+    const { gotScraping } = await import("got-scraping");
     const slug = req.params.slug;
     const baseUrl = SUPABASE_URL.replace(/\/$/, "");
 
@@ -36,50 +37,39 @@ app.get("/v/:slug", async (req, res) => {
 
     const buzzId = data[0].buzz_id;
     const buzzPageUrl = `https://buzzheavier.com/${buzzId}`;
-    const userAgent =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-    // 2. Mundu main page open chesi session cookies teesukovali
-    const pageRes = await fetch(buzzPageUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": userAgent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+    // 2. Chrome TLS fingerprint tho main page open chesi cookies teesukovali
+    const pageRes = await gotScraping({
+      url: buzzPageUrl,
+      throwHttpErrors: false,
     });
 
-    const rawCookies = pageRes.headers.getSetCookie
-      ? pageRes.headers.getSetCookie()
-      : [];
+    const rawCookies = pageRes.headers["set-cookie"] || [];
     const cookieHeader = rawCookies.map((c) => c.split(";")[0]).join("; ");
 
-    // 3. Aa cookies + full browser headers tho /download request pampali
-    const buzzRes = await fetch(`${buzzPageUrl}/download`, {
-      method: "GET",
+    // 3. /download request pampali
+    const buzzRes = await gotScraping({
+      url: `${buzzPageUrl}/download`,
       headers: {
-        "User-Agent": userAgent,
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": buzzPageUrl,
-        "Origin": "https://buzzheavier.com",
+        Referer: buzzPageUrl,
+        Origin: "https://buzzheavier.com",
         "hx-current-url": buzzPageUrl,
         "hx-request": "true",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
         ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
-      redirect: "manual",
+      followRedirect: false,
+      throwHttpErrors: false,
     });
 
     let directLink =
-      buzzRes.headers.get("hx-redirect") || buzzRes.headers.get("location");
+      buzzRes.headers["hx-redirect"] || buzzRes.headers["location"];
 
     if (!directLink) {
       return res
         .status(502)
-        .send(`Direct link raledu (Page: ${pageRes.status}, Download: ${buzzRes.status})`);
+        .send(
+          `Direct link raledu (Page: ${pageRes.statusCode}, Download: ${buzzRes.statusCode})`
+        );
     }
 
     if (directLink.startsWith("/")) {
