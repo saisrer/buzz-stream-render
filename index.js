@@ -1,75 +1,26 @@
-const express = require("express");
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
-app.get("/", (req, res) => {
-  res.send("Buzz Stream Render Server is Running!");
-});
-
-app.get("/v/:slug", async (req, res) => {
-  try {
-    const { gotScraping } = await import("got-scraping");
-    const slug = req.params.slug;
-    const baseUrl = SUPABASE_URL.replace(/\/$/, "");
-
-    // 1. Supabase nunchi buzz_id teesukovali
-    const dbRes = await fetch(
-      `${baseUrl}/rest/v1/buzz_movies?slug=eq.${encodeURIComponent(slug)}&select=buzz_id,title`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-      }
-    );
-
-    if (!dbRes.ok) {
-      return res.status(500).send(`Supabase Error: ${await dbRes.text()}`);
-    }
-
-    const data = await dbRes.json();
-    if (!data || data.length === 0) {
-      return res.status(404).send("Movie not found in database");
-    }
-
-    const buzzId = data[0].buzz_id;
-    const buzzPageUrl = `https://buzzheavier.com/${buzzId}`;
-
-    // 2. Chrome TLS fingerprint tho main page open chesi cookies teesukovali
-    const pageRes = await gotScraping({
-      url: buzzPageUrl,
-      throwHttpErrors: false,
-    });
-
-    const rawCookies = pageRes.headers["set-cookie"] || [];
-    const cookieHeader = rawCookies.map((c) => c.split(";")[0]).join("; ");
-
     // 3. /download request pampali
     const buzzRes = await gotScraping({
       url: `${buzzPageUrl}/download`,
       headers: {
-        Referer: buzzPageUrl,
-        Origin: "https://buzzheavier.com",
+        referer: buzzPageUrl,
         "hx-current-url": buzzPageUrl,
         "hx-request": "true",
-        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        ...(cookieHeader ? { cookie: cookieHeader } : {}),
       },
       followRedirect: false,
       throwHttpErrors: false,
     });
 
-    let directLink =
-      buzzRes.headers["hx-redirect"] || buzzRes.headers["location"];
+    let directLink = buzzRes.headers["hx-redirect"] || buzzRes.headers["location"];
 
-    if (!directLink) {
-      return res
-        .status(502)
-        .send(
-          `Direct link raledu (Page: ${pageRes.statusCode}, Download: ${buzzRes.statusCode})`
-        );
+    // Okavela malli main page ke redirect chesthe debug info chupinchali
+    if (!directLink || directLink.endsWith(`/${buzzId}`)) {
+      return res.json({
+        error: "Direct MP4 link raledu",
+        status: buzzRes.statusCode,
+        hxRedirect: buzzRes.headers["hx-redirect"] || null,
+        location: buzzRes.headers["location"] || null,
+      });
     }
 
     if (directLink.startsWith("/")) {
@@ -77,11 +28,3 @@ app.get("/v/:slug", async (req, res) => {
     }
 
     res.redirect(302, directLink);
-  } catch (err) {
-    res.status(500).send(`Server Error: ${err.message}`);
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
