@@ -37,23 +37,30 @@ app.get("/v/:slug", async (req, res) => {
 
     const buzzId = data[0].buzz_id;
     const buzzPageUrl = `https://buzzheavier.com/${buzzId}`;
+    const sessionToken = { id: Date.now().toString() };
 
-    // 2. Main page open chesi cookies teesukovali
+    // 2. Main page open chesi cookies teesukovali (same session fingerprint)
     const pageRes = await gotScraping({
       url: buzzPageUrl,
+      sessionToken,
       throwHttpErrors: false,
     });
 
     const rawCookies = pageRes.headers["set-cookie"] || [];
     const cookieHeader = rawCookies.map((c) => c.split(";")[0]).join("; ");
 
-    // 3. /download request pampali
+    // 3. Exact HTMX download button headers tho /download request pampali
     const buzzRes = await gotScraping({
       url: `${buzzPageUrl}/download`,
+      sessionToken,
       headers: {
+        accept: "*/*",
         referer: buzzPageUrl,
         "hx-current-url": buzzPageUrl,
         "hx-request": "true",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
         ...(cookieHeader ? { cookie: cookieHeader } : {}),
       },
       followRedirect: false,
@@ -63,7 +70,6 @@ app.get("/v/:slug", async (req, res) => {
     let directLink =
       buzzRes.headers["hx-redirect"] || buzzRes.headers["location"];
 
-    // Okavela malli main page ke redirect chesthe debug info chupinchali
     if (!directLink || directLink.endsWith(`/${buzzId}`)) {
       return res.json({
         error: "Direct MP4 link raledu",
