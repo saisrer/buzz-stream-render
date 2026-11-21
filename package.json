@@ -1,5 +1,5 @@
 {
-  "name": "buzz-keepalive-bot",
+  "name": "pixeldrain-keepalive-bot",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,7 +7,6 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "got-scraping": "^4.0.0",
     "node-telegram-bot-api": "^0.66.0"
   }
 }
