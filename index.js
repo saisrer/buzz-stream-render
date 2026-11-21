@@ -6,7 +6,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
 app.get("/", (req, res) => {
-  res.send("Buzz Stream Render Server is Running! Use /v/your-slug");
+  res.send("Buzz Stream Render Server is Running!");
 });
 
 app.get("/v/:slug", async (req, res) => {
@@ -36,30 +36,56 @@ app.get("/v/:slug", async (req, res) => {
 
     const buzzId = data[0].buzz_id;
     const buzzPageUrl = `https://buzzheavier.com/${buzzId}`;
+    const userAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-    // 2. Buzzheavier nunchi direct link fetch cheyali
+    // 2. Mundu main page open chesi session cookies teesukovali
+    const pageRes = await fetch(buzzPageUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": userAgent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+
+    const rawCookies = pageRes.headers.getSetCookie
+      ? pageRes.headers.getSetCookie()
+      : [];
+    const cookieHeader = rawCookies.map((c) => c.split(";")[0]).join("; ");
+
+    // 3. Aa cookies + full browser headers tho /download request pampali
     const buzzRes = await fetch(`${buzzPageUrl}/download`, {
       method: "GET",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": userAgent,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Referer": buzzPageUrl,
+        "Origin": "https://buzzheavier.com",
         "hx-current-url": buzzPageUrl,
         "hx-request": "true",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
       redirect: "manual",
     });
 
-    let directLink = buzzRes.headers.get("hx-redirect") || buzzRes.headers.get("location");
+    let directLink =
+      buzzRes.headers.get("hx-redirect") || buzzRes.headers.get("location");
 
     if (!directLink) {
-      return res.status(502).send(`Direct link raledu (Status: ${buzzRes.status})`);
+      return res
+        .status(502)
+        .send(`Direct link raledu (Page: ${pageRes.status}, Download: ${buzzRes.status})`);
     }
 
     if (directLink.startsWith("/")) {
       directLink = `https://buzzheavier.com${directLink}`;
     }
 
-    // 3. Direct video link ki redirect cheyali
     res.redirect(302, directLink);
   } catch (err) {
     res.status(500).send(`Server Error: ${err.message}`);
