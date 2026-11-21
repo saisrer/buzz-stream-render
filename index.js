@@ -1,47 +1,32 @@
 const express = require("express");
+const TelegramBot = require("node-telegram-bot-api");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const SUPABASE_URL = process.env.SUPABASE_URL.replace(/\/$/, "");
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const PROXY_URL = process.env.PROXY_URL; // Format: http://user:pass@host:port
+
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+let currentDayIndex = 0;
 
 app.get("/", (req, res) => {
-  res.send("Buzz Stream Render Server is Running!");
+  res.send("Buzz Keep-Alive Bot is Running!");
 });
 
-app.get("/v/:slug", async (req, res) => {
+async function touchBuzzFile(buzzId) {
+  const { gotScraping } = await import("got-scraping");
+  const pageUrl = `https://buzzheavier.com/${buzzId}`;
+  const sessionToken = { id: Date.now().toString() };
+
   try {
-    const { gotScraping } = await import("got-scraping");
-    const slug = req.params.slug;
-    const baseUrl = SUPABASE_URL.replace(/\/$/, "");
-
-    // 1. Supabase nunchi buzz_id teesukovali
-    const dbRes = await fetch(
-      `${baseUrl}/rest/v1/buzz_movies?slug=eq.${encodeURIComponent(slug)}&select=buzz_id,title`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-      }
-    );
-
-    if (!dbRes.ok) {
-      return res.status(500).send(`Supabase Error: ${await dbRes.text()}`);
-    }
-
-    const data = await dbRes.json();
-    if (!data || data.length === 0) {
-      return res.status(404).send("Movie not found in database");
-    }
-
-    const buzzId = data[0].buzz_id;
-    const buzzPageUrl = `https://buzzheavier.com/${buzzId}`;
-    const sessionToken = { id: Date.now().toString() };
-
-    // 2. Main page open chesi cookies teesukovali (same session fingerprint)
+    // 1. Proxy dwara main page open chesi cookies teesukovali
     const pageRes = await gotScraping({
-      url: buzzPageUrl,
+      url: pageUrl,
+      proxyUrl: PROXY_URL,
       sessionToken,
       throwHttpErrors: false,
     });
@@ -49,14 +34,15 @@ app.get("/v/:slug", async (req, res) => {
     const rawCookies = pageRes.headers["set-cookie"] || [];
     const cookieHeader = rawCookies.map((c) => c.split(";")[0]).join("; ");
 
-    // 3. Exact HTMX download button headers tho /download request pampali
+    // 2. Proxy dwara /download call cheyali
     const buzzRes = await gotScraping({
-      url: `${buzzPageUrl}/download`,
+      url: `${pageUrl}/download`,
+      proxyUrl: PROXY_URL,
       sessionToken,
       headers: {
         accept: "*/*",
-        referer: buzzPageUrl,
-        "hx-current-url": buzzPageUrl,
+        referer: pageUrl,
+        "hx-current-url": pageUrl,
         "hx-request": "true",
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
@@ -71,24 +57,91 @@ app.get("/v/:slug", async (req, res) => {
       buzzRes.headers["hx-redirect"] || buzzRes.headers["location"];
 
     if (!directLink || directLink.endsWith(`/${buzzId}`)) {
-      return res.json({
-        error: "Direct MP4 link raledu",
-        status: buzzRes.statusCode,
-        hxRedirect: buzzRes.headers["hx-redirect"] || null,
-        location: buzzRes.headers["location"] || null,
-      });
+      return { ok: false, reason: `Blocked/No link (Status ${buzzRes.statusCode})` };
     }
 
     if (directLink.startsWith("/")) {
       directLink = `https://buzzheavier.com${directLink}`;
     }
 
-    res.redirect(302, directLink);
+    // 3. Same Proxy dwara kevalam 1KB download chesi timer reset cheyali
+    const fileRes = await gotScraping({
+      url: directLink,
+      proxyUrl: PROXY_URL,
+      sessionToken,
+      headers: {
+        range: "bytes=0-1024",
+      },
+      throwHttpErrors: false,
+    });
+
+    if (fileRes.statusCode === 200 || fileRes.statusCode === 206) {
+      return { ok: true };
+    }
+    return { ok: false, reason: `File status ${fileRes.statusCode}` };
   } catch (err) {
-    res.status(500).send(`Server Error: ${err.message}`);
+    return { ok: false, reason: err.message };
   }
-});
+}
+
+async function runBatch(chatId, runAll = false) {
+  try {
+    const dbRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/buzz_movies?select=slug,buzz_id`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+
+    const movies = await dbRes.json();
+    if (!movies || !movies.length) {
+      return bot.sendMessage(chatId, "Database lo movies emi levu.");
+    }
+
+    let batch = movies;
+    if (!runAll) {
+      const batchSize = Math.max(1, Math.ceil(movies.length / 15));
+      const start = (currentDayIndex * batchSize) % movies.length;
+      batch = movies.slice(start, start + batchSize);
+      currentDayIndex = (currentDayIndex + 1) % 15;
+    }
+
+    bot.sendMessage(chatId, `🔄 ${batch.length} files refresh start chesanu...`);
+
+    let success = 0;
+    let failed = [];
+
+    for (const movie of batch) {
+      const result = await touchBuzzFile(movie.buzz_id);
+      if (result.ok) {
+        success++;
+      } else {
+        failed.push(`${movie.slug} (${result.reason})`);
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+
+    let report = `✅ Refresh Complete!\nSuccess: ${success}/${batch.length}`;
+    if (failed.length > 0) {
+      report += `\n\n❌ Failed:\n${failed.join("\n")}`;
+    }
+    bot.sendMessage(chatId, report);
+  } catch (err) {
+    bot.sendMessage(chatId, `❌ Error: ${err.message}`);
+  }
+}
+
+bot.onText(/\/refresh$/, (msg) => runBatch(msg.chat.id, false));
+bot.onText(/\/refreshall$/, (msg) => runBatch(msg.chat.id, true));
+
+// Every 24 hours ki auto-run
+setInterval(() => {
+  if (ADMIN_CHAT_ID) runBatch(ADMIN_CHAT_ID, false);
+}, 24 * 60 * 60 * 1000);
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server & Bot running on port ${PORT}`);
 });
