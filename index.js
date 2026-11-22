@@ -24,7 +24,7 @@ function getPixeldrainAuthHeader() {
   };
 }
 
-// 1. Pixeldrain lo kothaga upload chesina files ni automatic ga Supabase lo save chestundi
+// 1. Pixeldrain lo kothaga upload chesina files ni automatic ga Supabase lo save chesi URLs pampistundi
 async function syncPixeldrainFiles(chatId, isAuto = false) {
   if (!PIXELDRAIN_API_KEY) {
     if (!isAuto && chatId) {
@@ -94,12 +94,16 @@ async function syncPixeldrainFiles(chatId, isAuto = false) {
     if (chatId) {
       const listText = newFiles
         .slice(0, 15)
-        .map((f) => `• \`${f.name || f.id}\` (\`${f.id}\`)`)
-        .join("\n");
+        .map((f) => `• *${f.name || f.id}*\n  \`https://pixeldrain.com/u/${f.id}\``)
+        .join("\n\n");
+
       await bot.sendMessage(
         chatId,
-        `🆕 *${newFiles.length} Kotha Pixeldrain Files Supabase lo Save Ayyayi!*\n\n${listText}`,
-        { parse_mode: "Markdown" }
+        `🆕 *${newFiles.length} Kotha Pixeldrain Files Save Ayyayi!*\n_(Tap URL to copy)_\n\n${listText}`,
+        {
+          parse_mode: "Markdown",
+          disable_web_page_preview: true,
+        }
       );
     }
   } catch (err) {
@@ -193,10 +197,13 @@ async function checkAndRefreshDueFiles(chatId, forceAll = false, isAuto = false)
           chatId,
           `📥 *File Refreshed!*\n` +
             `🎬 Movie: \`${movie.slug}\`\n` +
-            `🆔 ID: \`${movie.buzz_id}\`\n` +
+            `🔗 URL: \`https://pixeldrain.com/u/${movie.buzz_id}\`\n` +
             `📦 Downloaded: *${result.bytes} bytes* (Status ${result.status})\n` +
             `📅 Next Auto-Refresh: *${nextDate}*`,
-          { parse_mode: "Markdown" }
+          {
+            parse_mode: "Markdown",
+            disable_web_page_preview: true,
+          }
         );
       } else {
         await bot.sendMessage(
@@ -247,7 +254,7 @@ bot.onText(/\/start$/, async (msg) => {
         `📅 Next Auto-Refresh: ${nextInfo}\n\n` +
         `*Commands:*\n` +
         `/sync - Instant ga kotha files check cheyadam\n` +
-        `/plan - Anni files schedule\n` +
+        `/plan - Anni files schedule & URLs\n` +
         `/check - Due files check cheyadam\n` +
         `/refreshall - Anni files ippude refresh cheyadam`,
       { parse_mode: "Markdown" }
@@ -279,11 +286,12 @@ bot.onText(/\/plan$/, async (msg) => {
       const last = m.last_refreshed ? new Date(m.last_refreshed) : new Date();
       const next = new Date(last.getTime() + REFRESH_AFTER_DAYS * 24 * 60 * 60 * 1000);
       const nextStr = next.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-      return `• *${m.slug}* → Next: ${nextStr}`;
+      return `• *${m.slug}* (Next: ${nextStr})\n  \`https://pixeldrain.com/u/${m.buzz_id}\``;
     });
 
-    bot.sendMessage(msg.chat.id, `📅 *Auto-Refresh Plan:*\n\n${lines.join("\n")}`, {
+    bot.sendMessage(msg.chat.id, `📅 *Auto-Refresh Plan:*\n\n${lines.join("\n\n")}`, {
       parse_mode: "Markdown",
+      disable_web_page_preview: true,
     });
   } catch (err) {
     bot.sendMessage(msg.chat.id, `❌ Error: ${err.message}`);
