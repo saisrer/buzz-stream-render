@@ -50,7 +50,6 @@ async function syncPixeldrainFiles(chatId, isAuto = false) {
     const pdData = await pdRes.json();
     const pdFiles = Array.isArray(pdData.files) ? pdData.files : [];
 
-    // Already DB lo unna IDs fetch cheyyi
     const dbRes = await fetch(`${SUPABASE_URL}/rest/v1/buzz_movies?select=buzz_id`, {
       headers: {
         apikey: SUPABASE_KEY,
@@ -247,7 +246,7 @@ bot.onText(/\/start$/, async (msg) => {
         `🎬 Total Files: *${total}*\n` +
         `📅 Next Auto-Refresh: ${nextInfo}\n\n` +
         `*Commands:*\n` +
-        `/sync - Pixeldrain kotha files Supabase lo save cheyadam\n` +
+        `/sync - Instant ga kotha files check cheyadam\n` +
         `/plan - Anni files schedule\n` +
         `/check - Due files check cheyadam\n` +
         `/refreshall - Anni files ippude refresh cheyadam`,
@@ -291,10 +290,16 @@ bot.onText(/\/plan$/, async (msg) => {
   }
 });
 
-// Prathi 6 hours ki auto-sync + due files refresh
+// Prathi 15 minutes ki automatic ga kotha Pixeldrain files check chesi Supabase lo save chestundi
 setInterval(async () => {
   if (ADMIN_CHAT_ID) {
     await syncPixeldrainFiles(ADMIN_CHAT_ID, true);
+  }
+}, 15 * 60 * 1000);
+
+// Prathi 6 hours ki due files (25 days) 1 KB download ping chestundi
+setInterval(async () => {
+  if (ADMIN_CHAT_ID) {
     await checkAndRefreshDueFiles(ADMIN_CHAT_ID, false, true);
   }
 }, 6 * 60 * 60 * 1000);
