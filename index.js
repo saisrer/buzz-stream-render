@@ -8,6 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL.replace(/\/$/, "");
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const PIXELDRAIN_API_KEY = process.env.PIXELDRAIN_API_KEY;
 
 const REFRESH_AFTER_DAYS = 25;
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -16,6 +17,100 @@ app.get("/", (req, res) => {
   res.send("Pixeldrain Smart Scheduler Bot is Running!");
 });
 
+function getPixeldrainAuthHeader() {
+  if (!PIXELDRAIN_API_KEY) return {};
+  return {
+    Authorization: "Basic " + Buffer.from(":" + PIXELDRAIN_API_KEY).toString("base64"),
+  };
+}
+
+// 1. Pixeldrain lo kothaga upload chesina files ni automatic ga Supabase lo save chestundi
+async function syncPixeldrainFiles(chatId, isAuto = false) {
+  if (!PIXELDRAIN_API_KEY) {
+    if (!isAuto && chatId) {
+      return bot.sendMessage(chatId, "⚠️ `PIXELDRAIN_API_KEY` env variable set cheyyaledu.", {
+        parse_mode: "Markdown",
+      });
+    }
+    return;
+  }
+
+  try {
+    const pdRes = await fetch("https://pixeldrain.com/api/user/files", {
+      headers: {
+        ...getPixeldrainAuthHeader(),
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    if (!pdRes.ok) {
+      throw new Error(`Pixeldrain API Status ${pdRes.status}`);
+    }
+
+    const pdData = await pdRes.json();
+    const pdFiles = Array.isArray(pdData.files) ? pdData.files : [];
+
+    // Already DB lo unna IDs fetch cheyyi
+    const dbRes = await fetch(`${SUPABASE_URL}/rest/v1/buzz_movies?select=buzz_id`, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+      },
+    });
+    const existingRows = await dbRes.json();
+    const existingIds = new Set(
+      (Array.isArray(existingRows) ? existingRows : []).map((r) => r.buzz_id)
+    );
+
+    const newFiles = pdFiles.filter((f) => f.id && !existingIds.has(f.id));
+
+    if (!newFiles.length) {
+      if (!isAuto && chatId) {
+        return bot.sendMessage(chatId, "✅ Kotha files emi levu. Anni already Supabase lo unnayi.");
+      }
+      return;
+    }
+
+    const rowsToInsert = newFiles.map((f) => ({
+      slug: f.name || f.id,
+      buzz_id: f.id,
+      last_refreshed: new Date().toISOString(),
+    }));
+
+    const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/buzz_movies`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(rowsToInsert),
+    });
+
+    if (!insertRes.ok) {
+      throw new Error(`Supabase Insert Status ${insertRes.status}`);
+    }
+
+    if (chatId) {
+      const listText = newFiles
+        .slice(0, 15)
+        .map((f) => `• \`${f.name || f.id}\` (\`${f.id}\`)`)
+        .join("\n");
+      await bot.sendMessage(
+        chatId,
+        `🆕 *${newFiles.length} Kotha Pixeldrain Files Supabase lo Save Ayyayi!*\n\n${listText}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+  } catch (err) {
+    if (!isAuto && chatId) {
+      bot.sendMessage(chatId, `❌ Sync Error: ${err.message}`);
+    }
+  }
+}
+
+// 2. File delete avvakunda 1 KB download ping
 async function touchPixeldrainFile(fileId) {
   const url = `https://pixeldrain.com/api/file/${fileId}`;
 
@@ -24,6 +119,9 @@ async function touchPixeldrainFile(fileId) {
       method: "GET",
       headers: {
         Range: "bytes=0-1024",
+        Referer: `https://pixeldrain.com/u/${fileId}`,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        ...getPixeldrainAuthHeader(),
       },
     });
 
@@ -73,7 +171,6 @@ async function checkAndRefreshDueFiles(chatId, forceAll = false, isAuto = false)
     const dueMovies = await dbRes.json();
 
     if (!dueMovies || !dueMovies.length) {
-      // Auto check lo due files lekapothe silent ga untundi (spam avvadu)
       if (!isAuto && chatId) {
         return bot.sendMessage(
           chatId,
@@ -117,7 +214,6 @@ async function checkAndRefreshDueFiles(chatId, forceAll = false, isAuto = false)
   }
 }
 
-// /start command — Bot status + next scheduled refresh chupistundi
 bot.onText(/\/start$/, async (msg) => {
   try {
     const dbRes = await fetch(
@@ -150,8 +246,8 @@ bot.onText(/\/start$/, async (msg) => {
       `🤖 *Pixeldrain Keep-Alive Bot Active!*\n\n` +
         `🎬 Total Files: *${total}*\n` +
         `📅 Next Auto-Refresh: ${nextInfo}\n\n` +
-        `File refresh ayinappudalla ikkade automatic ga update vastundi.\n\n` +
         `*Commands:*\n` +
+        `/sync - Pixeldrain kotha files Supabase lo save cheyadam\n` +
         `/plan - Anni files schedule\n` +
         `/check - Due files check cheyadam\n` +
         `/refreshall - Anni files ippude refresh cheyadam`,
@@ -162,6 +258,7 @@ bot.onText(/\/start$/, async (msg) => {
   }
 });
 
+bot.onText(/\/sync$/, (msg) => syncPixeldrainFiles(msg.chat.id, false));
 bot.onText(/\/check$/, (msg) => checkAndRefreshDueFiles(msg.chat.id, false, false));
 bot.onText(/\/refreshall$/, (msg) => checkAndRefreshDueFiles(msg.chat.id, true, false));
 
@@ -194,9 +291,12 @@ bot.onText(/\/plan$/, async (msg) => {
   }
 });
 
-// Prathi 6 hours ki silent auto-check (due files untene refresh chesi message pampistundi)
-setInterval(() => {
-  if (ADMIN_CHAT_ID) checkAndRefreshDueFiles(ADMIN_CHAT_ID, false, true);
+// Prathi 6 hours ki auto-sync + due files refresh
+setInterval(async () => {
+  if (ADMIN_CHAT_ID) {
+    await syncPixeldrainFiles(ADMIN_CHAT_ID, true);
+    await checkAndRefreshDueFiles(ADMIN_CHAT_ID, false, true);
+  }
 }, 6 * 60 * 60 * 1000);
 
 app.listen(PORT, () => {
